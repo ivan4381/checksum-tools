@@ -98,9 +98,9 @@ class TaxDataIntegrityApp:
         ttk.Entry(frame_input, textvariable=self.manifest_in_var, width=60).grid(row=1, column=1, padx=5, pady=5)
         ttk.Button(frame_input, text="Browse", command=self.browse_manifest_in).grid(row=1, column=2, padx=5, pady=5)
 
-        # Master Hash pembanding (opsional, dicatat di BAST saat manifest dibuat)
+        # Master Hash pembanding (wajib diisi, dicatat di BAST saat manifest dibuat)
         self.expected_master_hash_var = tk.StringVar()
-        ttk.Label(frame_input, text="Master Hash Manifest (dari BAST, opsional):").grid(row=2, column=0, padx=5, pady=5, sticky='w')
+        ttk.Label(frame_input, text="Master Hash Manifest (dari BAST, wajib):").grid(row=2, column=0, padx=5, pady=5, sticky='w')
         ttk.Entry(frame_input, textvariable=self.expected_master_hash_var, width=60).grid(row=2, column=1, padx=5, pady=5)
 
         # Eksekusi
@@ -224,23 +224,22 @@ class TaxDataIntegrityApp:
         except Exception as e:
             self.msg_queue.put({"type": "error", "msg": f"Gagal menyimpan CSV: {e}"})
 
-    def thread_verify_integrity(self, tgt_dir, in_csv, expected_master_hash=""):
-        # 0. Verifikasi Master Hash manifest (kalau diisi) sebelum lanjut apapun.
+    def thread_verify_integrity(self, tgt_dir, in_csv, expected_master_hash):
+        # 0. Verifikasi Master Hash manifest sebelum lanjut apapun (wajib).
         # Master Hash = SHA256 dari file manifest.csv itu sendiri (lihat thread_generate_manifest).
         # Kalau tidak cocok, manifest kemungkinan sudah diedit/rusak -> hasil verifikasi
         # per-file di bawahnya tidak bisa dipercaya, jadi proses dihentikan di sini.
-        if expected_master_hash:
-            actual_master_hash, _, _, hash_status = self.calculate_file_hash(in_csv, count_lines=False)
-            if actual_master_hash is None:
-                self.msg_queue.put({"type": "error", "msg": f"Gagal membaca Manifest: {hash_status}"})
-                return
-            if actual_master_hash.lower() != expected_master_hash.strip().lower():
-                self.msg_queue.put({
-                    "type": "master_hash_mismatch",
-                    "expected": expected_master_hash.strip(),
-                    "actual": actual_master_hash,
-                })
-                return
+        actual_master_hash, _, _, hash_status = self.calculate_file_hash(in_csv, count_lines=False)
+        if actual_master_hash is None:
+            self.msg_queue.put({"type": "error", "msg": f"Gagal membaca Manifest: {hash_status}"})
+            return
+        if actual_master_hash.lower() != expected_master_hash.strip().lower():
+            self.msg_queue.put({
+                "type": "master_hash_mismatch",
+                "expected": expected_master_hash.strip(),
+                "actual": actual_master_hash,
+            })
+            return
 
         # 1. Baca Manifest
         manifest_dict = {}
@@ -344,6 +343,10 @@ class TaxDataIntegrityApp:
 
         if not tgt or not mani:
             messagebox.showwarning("Peringatan", "Harap isi Target Folder dan File Manifest.")
+            return
+
+        if not expected_master_hash:
+            messagebox.showwarning("Peringatan", "Master Hash Manifest (dari BAST) wajib diisi sebelum verifikasi dapat dijalankan.")
             return
 
         self.btn_verify.config(state='disabled')
