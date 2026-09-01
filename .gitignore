@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# Nuitka
+*.build/
+*.dist/
+*.onefile-build/
+*.exe
+*.bin
+
+# IDE
+.vscode/
+.idea/
