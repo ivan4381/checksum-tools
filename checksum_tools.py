@@ -97,7 +97,12 @@ class TaxDataIntegrityApp:
         ttk.Label(frame_input, text="File Manifest (CSV):").grid(row=1, column=0, padx=5, pady=5, sticky='w')
         ttk.Entry(frame_input, textvariable=self.manifest_in_var, width=60).grid(row=1, column=1, padx=5, pady=5)
         ttk.Button(frame_input, text="Browse", command=self.browse_manifest_in).grid(row=1, column=2, padx=5, pady=5)
-        
+
+        # Master Hash pembanding (opsional, dicatat di BAST saat manifest dibuat)
+        self.expected_master_hash_var = tk.StringVar()
+        ttk.Label(frame_input, text="Master Hash Manifest (dari BAST, opsional):").grid(row=2, column=0, padx=5, pady=5, sticky='w')
+        ttk.Entry(frame_input, textvariable=self.expected_master_hash_var, width=60).grid(row=2, column=1, padx=5, pady=5)
+
         # Eksekusi
         self.btn_verify = ttk.Button(self.tab_verify, text="Mulai Verifikasi Data", command=self.start_verify)
         self.btn_verify.pack(pady=5)
@@ -119,9 +124,9 @@ class TaxDataIntegrityApp:
         self.tree_verify.heading("Ukuran", text="Ukuran Byte")
         self.tree_verify.heading("Detail", text="Keterangan Tambahan")
         
-        self.tree_verify.column("Status", width=100, anchor='center')
+        self.tree_verify.column("Status", width=100, minwidth=100, anchor='center', stretch=False)
         self.tree_verify.column("File", width=300)
-        self.tree_verify.column("Ukuran", width=100, anchor='e')
+        self.tree_verify.column("Ukuran", width=100, minwidth=100, anchor='e', stretch=False)
         self.tree_verify.column("Detail", width=250)
         
         # Scrollbar tabel
@@ -219,7 +224,24 @@ class TaxDataIntegrityApp:
         except Exception as e:
             self.msg_queue.put({"type": "error", "msg": f"Gagal menyimpan CSV: {e}"})
 
-    def thread_verify_integrity(self, tgt_dir, in_csv):
+    def thread_verify_integrity(self, tgt_dir, in_csv, expected_master_hash=""):
+        # 0. Verifikasi Master Hash manifest (kalau diisi) sebelum lanjut apapun.
+        # Master Hash = SHA256 dari file manifest.csv itu sendiri (lihat thread_generate_manifest).
+        # Kalau tidak cocok, manifest kemungkinan sudah diedit/rusak -> hasil verifikasi
+        # per-file di bawahnya tidak bisa dipercaya, jadi proses dihentikan di sini.
+        if expected_master_hash:
+            actual_master_hash, _, _, hash_status = self.calculate_file_hash(in_csv, count_lines=False)
+            if actual_master_hash is None:
+                self.msg_queue.put({"type": "error", "msg": f"Gagal membaca Manifest: {hash_status}"})
+                return
+            if actual_master_hash.lower() != expected_master_hash.strip().lower():
+                self.msg_queue.put({
+                    "type": "master_hash_mismatch",
+                    "expected": expected_master_hash.strip(),
+                    "actual": actual_master_hash,
+                })
+                return
+
         # 1. Baca Manifest
         manifest_dict = {}
         try:
@@ -241,6 +263,9 @@ class TaxDataIntegrityApp:
             for file in files:
                 hdd_files.append(os.path.join(root_dir, file))
                 
+        # Lookup hash -> path manifest, untuk mendeteksi file yang dipindah/rename
+        hash_to_path = {meta["hash"]: rel_path for rel_path, meta in manifest_dict.items()}
+
         total_steps = len(manifest_dict) + len(hdd_files) # Aproksimasi untuk progress bar
         current_step = 0
         
@@ -267,16 +292,27 @@ class TaxDataIntegrityApp:
                 self.msg_queue.put({"type": "result_verify", "status": status, "file": rel_path, "size": actual_size, "detail": detail})
                 checked_files.add(rel_path)
             else:
-                # File ada di HDD tapi tidak ada di manifest
-                _, actual_size, _, _ = self.calculate_file_hash(filepath, count_lines=False)
-                self.msg_queue.put({"type": "result_verify", "status": "UNTRACKED", "file": rel_path, "size": actual_size, "detail": "Ada di HDD, tidak ada di Manifest."})
+                # File ada di HDD tapi tidak ada di manifest (path tidak cocok).
+                # Tetap hitung hash untuk cek apakah isinya sama dengan salah satu
+                # entri manifest (kemungkinan file dipindah/rename) atau memang baru.
+                actual_hash, actual_size, _, _ = self.calculate_file_hash(filepath, count_lines=False)
+
+                if actual_hash in hash_to_path:
+                    detail = (f"Hash SAMA dengan manifest (path asal: {hash_to_path[actual_hash]}). "
+                               "Isi file identik, kemungkinan dipindah/rename, bukan file baru.")
+                else:
+                    detail = "Hash tidak ditemukan di Manifest manapun. File baru/berbeda isi."
+
+                self.msg_queue.put({"type": "result_verify", "status": "UNTRACKED", "file": rel_path, "size": actual_size, "detail": detail})
 
         # 4. Cari file yang ada di manifest tapi hilang di HDD
         for rel_path, meta in manifest_dict.items():
+            current_step += 1
             if rel_path not in checked_files:
                 self.msg_queue.put({"type": "result_verify", "status": "MISSING", "file": rel_path, "size": meta["size"], "detail": "Hilang dari HDD eksternal."})
-                
-        self.msg_queue.put({"type": "done_verify"})
+            self.msg_queue.put({"type": "progress_verify", "current": current_step, "total": total_steps, "file": rel_path})
+
+        self.msg_queue.put({"type": "done_verify", "total": total_steps})
 
     # ==============================
     # GUI EVENT HANDLERS & QUEUE LOOP
@@ -304,20 +340,41 @@ class TaxDataIntegrityApp:
     def start_verify(self):
         tgt = self.tgt_folder_var.get()
         mani = self.manifest_in_var.get()
-        
+        expected_master_hash = self.expected_master_hash_var.get().strip()
+
         if not tgt or not mani:
             messagebox.showwarning("Peringatan", "Harap isi Target Folder dan File Manifest.")
             return
-            
+
         self.btn_verify.config(state='disabled')
         self.btn_export_log.config(state='disabled')
         self.tree_verify.delete(*self.tree_verify.get_children())
         self.verification_results.clear()
         self.prog_verify['value'] = 0
-        
+
         # Mulai Background Thread
-        thread = threading.Thread(target=self.thread_verify_integrity, args=(tgt, mani), daemon=True)
+        thread = threading.Thread(target=self.thread_verify_integrity, args=(tgt, mani, expected_master_hash), daemon=True)
         thread.start()
+
+    # Urutan prioritas status: yang paling butuh perhatian tampil paling atas
+    VERIFY_STATUS_ORDER = {"MODIFIED": 0, "MISSING": 1, "UNTRACKED": 2, "MATCH": 3}
+
+    def sort_verification_results(self):
+        """Urutkan hasil verifikasi: status (MODIFIED dulu) -> ukuran byte (besar dulu) -> nama file (A-Z),
+        lalu render ulang tabel supaya urutan tampilan konsisten dengan urutan export."""
+        def sort_key(row):
+            status, file, size, _detail = row
+            try:
+                size_val = int(size)
+            except (TypeError, ValueError):
+                size_val = 0
+            return (self.VERIFY_STATUS_ORDER.get(status, 99), -size_val, file.lower())
+
+        self.verification_results.sort(key=sort_key)
+
+        self.tree_verify.delete(*self.tree_verify.get_children())
+        for status, file, size, detail in self.verification_results:
+            self.tree_verify.insert("", tk.END, values=(status, file, size, detail), tags=(status,))
 
     def export_verification_log(self):
         if not self.verification_results: return
@@ -369,11 +426,25 @@ class TaxDataIntegrityApp:
                 self.tree_verify.yview_moveto(1) # Auto scroll ke bawah
                 
             elif msg["type"] == "done_verify":
+                self.prog_verify['value'] = self.prog_verify['maximum']
+                self.sort_verification_results()
                 self.lbl_verify_status.config(text="Verifikasi Selesai!")
                 self.btn_verify.config(state='normal')
                 self.btn_export_log.config(state='normal')
                 messagebox.showinfo("Verifikasi Selesai", "Proses audit data telah selesai.\nSilakan ekspor log untuk laporan.")
                 
+            elif msg["type"] == "master_hash_mismatch":
+                self.lbl_verify_status.config(text="Verifikasi DIBATALKAN: Master Hash manifest tidak cocok!")
+                self.btn_verify.config(state='normal')
+                messagebox.showerror(
+                    "Master Hash Tidak Cocok",
+                    "Verifikasi dihentikan karena Master Hash manifest tidak sesuai dengan yang tercatat di BAST.\n"
+                    "Ini menandakan file manifest.csv kemungkinan sudah diubah/rusak, sehingga hasil verifikasi "
+                    "per-file di dalamnya tidak bisa dipercaya.\n\n"
+                    f"Expected : {msg['expected']}\n"
+                    f"Actual   : {msg['actual']}"
+                )
+
             elif msg["type"] == "error":
                 messagebox.showerror("Error", msg["msg"])
                 self.btn_generate.config(state='normal')
