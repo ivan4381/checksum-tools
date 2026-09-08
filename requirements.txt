@@ -1,0 +1,9 @@
+# checksum-tools tidak butuh package pihak ketiga untuk berjalan.
+# Semua modul yang dipakai (tkinter, hashlib, csv, threading, queue, datetime,
+# getpass, pathlib) adalah bagian dari Python Standard Library.
+#
+# Package di bawah ini hanya diperlukan untuk MEMBANGUN (build) file .exe,
+# bukan untuk menjalankan checksum_tools.py langsung dengan `python checksum_tools.py`.
+
+pyinstaller>=6.0
+Pillow>=10.0

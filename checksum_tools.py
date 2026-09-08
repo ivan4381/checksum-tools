@@ -11,6 +11,9 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
 
+# Versi Aplikasi - ubah di sini saat rilis versi baru, otomatis tampil di title bar
+APP_VERSION = "1.1.5"
+
 # Konfigurasi Buffer Size untuk HDD (4 MB)
 CHUNK_SIZE = 4 * 1024 * 1024
 
@@ -22,7 +25,7 @@ def resource_path(relative_path):
 class TaxDataIntegrityApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("File Integrity Checker-Data Management SHD")
+        self.root.title(f"File Integrity Checker v{APP_VERSION} - Data Management SHD (dama.ppn.support@pertamina.com)")
         self.root.geometry("800x600")
         self.root.minsize(700, 500)
 
