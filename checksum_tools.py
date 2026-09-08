@@ -22,7 +22,7 @@ def resource_path(relative_path):
 class TaxDataIntegrityApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("File Integrity Checker")
+        self.root.title("File Integrity Checker-Data Management SHD")
         self.root.geometry("800x600")
         self.root.minsize(700, 500)
 
