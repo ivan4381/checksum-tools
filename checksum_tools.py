@@ -1,6 +1,9 @@
 import os
+import sys
 import csv
 import time
+import datetime
+import getpass
 import hashlib
 import threading
 import queue
@@ -9,15 +12,26 @@ from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
 
 # Konfigurasi Buffer Size untuk HDD (4 MB)
-CHUNK_SIZE = 4 * 1024 * 1024  
+CHUNK_SIZE = 4 * 1024 * 1024
+
+def resource_path(relative_path):
+    """Cari lokasi resource, kompatibel untuk mode script biasa maupun exe hasil PyInstaller (onefile)."""
+    base_path = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base_path, relative_path)
 
 class TaxDataIntegrityApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Tax Data Integrity Checker - BAST Pajak")
+        self.root.title("File Integrity Checker")
         self.root.geometry("800x600")
         self.root.minsize(700, 500)
-        
+
+        # Icon Aplikasi (title bar & taskbar)
+        try:
+            self.root.iconbitmap(resource_path("verified.ico"))
+        except Exception:
+            pass
+
         # Antrean (Queue) untuk komunikasi antara background thread dan GUI
         self.msg_queue = queue.Queue()
         
@@ -48,24 +62,34 @@ class TaxDataIntegrityApp:
         
         # Source Folder
         self.src_folder_var = tk.StringVar()
-        ttk.Label(frame_input, text="Folder Data CSV:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
+        ttk.Label(frame_input, text="Folder Data Sumber:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
         ttk.Entry(frame_input, textvariable=self.src_folder_var, width=60).grid(row=0, column=1, padx=5, pady=5)
         ttk.Button(frame_input, text="Browse", command=self.browse_src_folder).grid(row=0, column=2, padx=5, pady=5)
-        
+
+        # Opsi Termasuk Sub-folder
+        self.include_subfolder_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(frame_input, text="Termasuk sub-folder", variable=self.include_subfolder_var).grid(row=1, column=0, sticky='w', padx=5, pady=5)
+
         # Output Manifest File
         self.manifest_out_var = tk.StringVar()
-        ttk.Label(frame_input, text="Simpan Manifest Ke:").grid(row=1, column=0, padx=5, pady=5, sticky='w')
-        ttk.Entry(frame_input, textvariable=self.manifest_out_var, width=60).grid(row=1, column=1, padx=5, pady=5)
-        ttk.Button(frame_input, text="Browse", command=self.browse_manifest_out).grid(row=1, column=2, padx=5, pady=5)
-        
+        ttk.Label(frame_input, text="Simpan Manifest Ke:").grid(row=2, column=0, padx=5, pady=5, sticky='w')
+        ttk.Entry(frame_input, textvariable=self.manifest_out_var, width=60).grid(row=2, column=1, padx=5, pady=5)
+        ttk.Button(frame_input, text="Browse", command=self.browse_manifest_out).grid(row=2, column=2, padx=5, pady=5)
+
         # Opsi Hitung Baris
         self.count_lines_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(frame_input, text="Hitung jumlah baris (Newline \\n) - Cepat", variable=self.count_lines_var).grid(row=2, column=1, sticky='w', padx=5, pady=5)
+        ttk.Checkbutton(frame_input, text="Hitung jumlah baris di Manifest", variable=self.count_lines_var).grid(row=3, column=0, sticky='w', padx=5, pady=5)
         
-        # Eksekusi
-        self.btn_generate = ttk.Button(self.tab_manifest, text="Mulai Buat Manifest", command=self.start_generate_manifest)
-        self.btn_generate.pack(pady=10)
-        
+        # Eksekusi (Mulai Buat Manifest + Copy Log berdampingan agar tidak menggeser tinggi log window)
+        frame_actions = ttk.Frame(self.tab_manifest)
+        frame_actions.pack(pady=10)
+
+        self.btn_generate = ttk.Button(frame_actions, text="Mulai Buat Manifest", command=self.start_generate_manifest)
+        self.btn_generate.pack(side=tk.LEFT, padx=5)
+
+        # Copy Log to Clipboard - hanya dimunculkan (pack) setelah proses selesai
+        self.btn_copy_log = ttk.Button(frame_actions, text="Copy Log to Clipboard", command=self.copy_log_to_clipboard)
+
         # Progress & Status
         frame_status = ttk.LabelFrame(self.tab_manifest, text=" Status Proses ")
         frame_status.pack(fill='both', expand=True, padx=15, pady=10)
@@ -88,20 +112,24 @@ class TaxDataIntegrityApp:
         
         # Target Folder (HDD Eksternal)
         self.tgt_folder_var = tk.StringVar()
-        ttk.Label(frame_input, text="Folder HDD Eksternal:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
+        ttk.Label(frame_input, text="Folder Target Verifikasi:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
         ttk.Entry(frame_input, textvariable=self.tgt_folder_var, width=60).grid(row=0, column=1, padx=5, pady=5)
         ttk.Button(frame_input, text="Browse", command=self.browse_tgt_folder).grid(row=0, column=2, padx=5, pady=5)
-        
+
+        # Opsi Termasuk Sub-folder
+        self.verify_include_subfolder_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(frame_input, text="Termasuk sub-folder", variable=self.verify_include_subfolder_var).grid(row=1, column=0, sticky='w', padx=5, pady=5)
+
         # Input Manifest File
         self.manifest_in_var = tk.StringVar()
-        ttk.Label(frame_input, text="File Manifest (CSV):").grid(row=1, column=0, padx=5, pady=5, sticky='w')
-        ttk.Entry(frame_input, textvariable=self.manifest_in_var, width=60).grid(row=1, column=1, padx=5, pady=5)
-        ttk.Button(frame_input, text="Browse", command=self.browse_manifest_in).grid(row=1, column=2, padx=5, pady=5)
+        ttk.Label(frame_input, text="File Manifest (CSV):").grid(row=2, column=0, padx=5, pady=5, sticky='w')
+        ttk.Entry(frame_input, textvariable=self.manifest_in_var, width=60).grid(row=2, column=1, padx=5, pady=5)
+        ttk.Button(frame_input, text="Browse", command=self.browse_manifest_in).grid(row=2, column=2, padx=5, pady=5)
 
         # Master Hash pembanding (wajib diisi, dicatat di BAST saat manifest dibuat)
         self.expected_master_hash_var = tk.StringVar()
-        ttk.Label(frame_input, text="Master Hash Manifest (dari BAST, wajib):").grid(row=2, column=0, padx=5, pady=5, sticky='w')
-        ttk.Entry(frame_input, textvariable=self.expected_master_hash_var, width=60).grid(row=2, column=1, padx=5, pady=5)
+        ttk.Label(frame_input, text="Master Hash Manifest (dari BAST, wajib):").grid(row=3, column=0, padx=5, pady=5, sticky='w')
+        ttk.Entry(frame_input, textvariable=self.expected_master_hash_var, width=60).grid(row=3, column=1, padx=5, pady=5)
 
         # Eksekusi
         self.btn_verify = ttk.Button(self.tab_verify, text="Mulai Verifikasi Data", command=self.start_verify)
@@ -144,7 +172,7 @@ class TaxDataIntegrityApp:
         self.verification_results = [] # Untuk keperluan export text/csv
 
     # ==============================
-    # FUNGSI-FUNGSI BROWSE BROWSE
+    # FUNGSI-FUNGSI BROWSE
     # ==============================
     def browse_src_folder(self):
         folder = filedialog.askdirectory(title="Pilih Folder Sumber Data CSV")
@@ -155,7 +183,7 @@ class TaxDataIntegrityApp:
         if file: self.manifest_out_var.set(file)
 
     def browse_tgt_folder(self):
-        folder = filedialog.askdirectory(title="Pilih Folder HDD Eksternal")
+        folder = filedialog.askdirectory(title="Pilih Folder Target (Termasuk seluruh Sub-Folder)")
         if folder: self.tgt_folder_var.set(folder)
 
     def browse_manifest_in(self):
@@ -182,11 +210,13 @@ class TaxDataIntegrityApp:
             
         return sha256.hexdigest(), total_size, total_lines, "OK"
 
-    def thread_generate_manifest(self, src_dir, out_csv, count_lines):
+    def thread_generate_manifest(self, src_dir, out_csv, count_lines, include_subfolder, start_dt):
         files_to_process = []
         for root_dir, _, files in os.walk(src_dir):
             for file in files:
                 files_to_process.append(os.path.join(root_dir, file))
+            if not include_subfolder:
+                break
         
         total_files = len(files_to_process)
         if total_files == 0:
@@ -215,16 +245,25 @@ class TaxDataIntegrityApp:
                 
             # Hitung Master Hash
             master_hash, _, _, _ = self.calculate_file_hash(out_csv, count_lines=False)
-            
+
+            end_dt = datetime.datetime.now()
+
             self.msg_queue.put({
                 "type": "done_manifest",
                 "master_hash": master_hash,
-                "total_files": len(manifest_data)
+                "total_files": len(manifest_data),
+                "start_dt": start_dt,
+                "end_dt": end_dt,
+                "duration": end_dt - start_dt,
+                "src_dir": src_dir,
+                "out_csv": out_csv,
+                "include_subfolder": include_subfolder,
+                "user_id": getpass.getuser(),
             })
         except Exception as e:
             self.msg_queue.put({"type": "error", "msg": f"Gagal menyimpan CSV: {e}"})
 
-    def thread_verify_integrity(self, tgt_dir, in_csv, expected_master_hash):
+    def thread_verify_integrity(self, tgt_dir, in_csv, expected_master_hash, include_subfolder):
         # 0. Verifikasi Master Hash manifest sebelum lanjut apapun (wajib).
         # Master Hash = SHA256 dari file manifest.csv itu sendiri (lihat thread_generate_manifest).
         # Kalau tidak cocok, manifest kemungkinan sudah diedit/rusak -> hasil verifikasi
@@ -261,7 +300,9 @@ class TaxDataIntegrityApp:
         for root_dir, _, files in os.walk(tgt_dir):
             for file in files:
                 hdd_files.append(os.path.join(root_dir, file))
-                
+            if not include_subfolder:
+                break
+
         # Lookup hash -> path manifest, untuk mendeteksi file yang dipindah/rename
         hash_to_path = {meta["hash"]: rel_path for rel_path, meta in manifest_dict.items()}
 
@@ -325,21 +366,25 @@ class TaxDataIntegrityApp:
             return
             
         self.btn_generate.config(state='disabled')
+        self.btn_copy_log.pack_forget()
         self.txt_manifest_log.config(state='normal')
         self.txt_manifest_log.delete('1.0', tk.END)
         self.txt_manifest_log.config(state='disabled')
         self.prog_manifest['value'] = 0
-        
+
         count_lines = self.count_lines_var.get()
-        
+        include_subfolder = self.include_subfolder_var.get()
+        start_dt = datetime.datetime.now()
+
         # Mulai Background Thread
-        thread = threading.Thread(target=self.thread_generate_manifest, args=(src, out, count_lines), daemon=True)
+        thread = threading.Thread(target=self.thread_generate_manifest, args=(src, out, count_lines, include_subfolder, start_dt), daemon=True)
         thread.start()
 
     def start_verify(self):
         tgt = self.tgt_folder_var.get()
         mani = self.manifest_in_var.get()
         expected_master_hash = self.expected_master_hash_var.get().strip()
+        include_subfolder = self.verify_include_subfolder_var.get()
 
         if not tgt or not mani:
             messagebox.showwarning("Peringatan", "Harap isi Target Folder dan File Manifest.")
@@ -356,7 +401,7 @@ class TaxDataIntegrityApp:
         self.prog_verify['value'] = 0
 
         # Mulai Background Thread
-        thread = threading.Thread(target=self.thread_verify_integrity, args=(tgt, mani, expected_master_hash), daemon=True)
+        thread = threading.Thread(target=self.thread_verify_integrity, args=(tgt, mani, expected_master_hash, include_subfolder), daemon=True)
         thread.start()
 
     # Urutan prioritas status: yang paling butuh perhatian tampil paling atas
@@ -387,7 +432,22 @@ class TaxDataIntegrityApp:
                 writer = csv.writer(f)
                 writer.writerow(["Status", "Relative_Path", "Size_Bytes", "Detail"])
                 writer.writerows(self.verification_results)
-            messagebox.showinfo("Sukses", "Laporan Audit berhasil disimpan.")
+            messagebox.showinfo("Sukses", "Laporan Verifikasi berhasil disimpan.")
+
+    def format_duration_hhmmss(self, td):
+        total_seconds = int(td.total_seconds())
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+    def copy_log_to_clipboard(self):
+        log_text = self.txt_manifest_log.get('1.0', tk.END).strip()
+        if not log_text:
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(log_text)
+        self.root.update()
+        messagebox.showinfo("Disalin", "Log berhasil disalin ke clipboard.")
 
     def log_to_manifest_text(self, text):
         self.txt_manifest_log.config(state='normal')
@@ -411,11 +471,24 @@ class TaxDataIntegrityApp:
                 self.lbl_manifest_status.config(text="Selesai!")
                 self.btn_generate.config(state='normal')
                 
+                start_dt = msg["start_dt"]
+                end_dt = msg["end_dt"]
+                subfolder_line = ("✅ Termasuk sub-folder" if msg["include_subfolder"]
+                                   else "❌ Tidak termasuk sub-folder")
                 summary = (f"=== PROSES SELESAI ===\n"
+                           f"Folder Data Sumber: {msg['src_dir']}\n"
+                           f"{subfolder_line}\n"
                            f"Total File Terproses: {msg['total_files']}\n"
+                           f"Simpan Manifest Ke {msg['out_csv']}\n"
+                           f"Tanggal Proses    : {start_dt.strftime('%d-%m-%Y')}\n"
+                           f"Waktu Mulai       : {start_dt.strftime('%H:%M:%S')} waktu komputer setempat\n"
+                           f"Waktu Selesai     : {end_dt.strftime('%H:%M:%S')} waktu komputer setempat\n"
+                           f"Durasi Proses     : {self.format_duration_hhmmss(msg['duration'])}\n"
+                           f"User Id           : {msg['user_id']}\n"
                            f"MASTER HASH (Manifest): {msg['master_hash']}\n"
-                           f"Catat Master Hash ini ke dalam Berita Acara (BAST).")
+                           f"WAJIB Catat Master Hash ini ke dalam Berita Acara (BAST).")
                 self.log_to_manifest_text(summary)
+                self.btn_copy_log.pack(side=tk.LEFT, padx=5)
                 messagebox.showinfo("Berhasil", "Pembuatan Manifest Selesai!")
                 
             elif msg["type"] == "progress_verify":
@@ -434,7 +507,7 @@ class TaxDataIntegrityApp:
                 self.lbl_verify_status.config(text="Verifikasi Selesai!")
                 self.btn_verify.config(state='normal')
                 self.btn_export_log.config(state='normal')
-                messagebox.showinfo("Verifikasi Selesai", "Proses audit data telah selesai.\nSilakan ekspor log untuk laporan.")
+                messagebox.showinfo("Verifikasi Selesai", "Proses verifikasi file telah selesai.\nSilakan ekspor log untuk laporan.")
                 
             elif msg["type"] == "master_hash_mismatch":
                 self.lbl_verify_status.config(text="Verifikasi DIBATALKAN: Master Hash manifest tidak cocok!")
