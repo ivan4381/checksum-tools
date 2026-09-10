@@ -1,15 +1,22 @@
 import os
 import sys
 import csv
+import io
 import time
 import datetime
 import getpass
 import hashlib
+import socket
 import threading
 import queue
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
+
+BULAN_ID = [
+    "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+    "Juli", "Agustus", "September", "Oktober", "November", "Desember"
+]
 
 # Versi Aplikasi - ubah di sini saat rilis versi baru, otomatis tampil di title bar
 APP_VERSION = "1.1.5"
@@ -55,6 +62,11 @@ class TaxDataIntegrityApp:
         self.tab_verify = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_verify, text='2. Verifikasi Integritas (Pemeriksa)')
         self.setup_verify_tab()
+
+        # Tab 3: Check Integritas 1 File
+        self.tab_check = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_check, text='3. Check Integritas File')
+        self.setup_check_tab()
 
     # ==============================
     # UI SETUP: TAB 1 (BUAT MANIFEST)
@@ -173,6 +185,55 @@ class TaxDataIntegrityApp:
         self.tree_verify.tag_configure('UNTRACKED', background='#b8daff') # Biru
 
         self.verification_results = [] # Untuk keperluan export text/csv
+        self.last_verify_meta = None # Info waktu & host untuk metadata laporan export
+
+    # ==============================
+    # UI SETUP: TAB 3 (CHECK INTEGRITAS 1 FILE)
+    # ==============================
+    def setup_check_tab(self):
+        frame_input = ttk.LabelFrame(self.tab_check, text=" Pengaturan Pengecekan File ")
+        frame_input.pack(fill='x', padx=15, pady=10)
+
+        # File yang akan dicek
+        self.check_file_var = tk.StringVar()
+        ttk.Label(frame_input, text="File yang Dicek:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
+        ttk.Entry(frame_input, textvariable=self.check_file_var, width=60, state='readonly').grid(row=0, column=1, padx=5, pady=5)
+        ttk.Button(frame_input, text="Browse", command=self.browse_check_file).grid(row=0, column=2, padx=5, pady=5)
+
+        # Hash pembanding (expected)
+        self.check_expected_hash_var = tk.StringVar()
+        ttk.Label(frame_input, text="Hash Pembanding (Expected):").grid(row=1, column=0, padx=5, pady=5, sticky='w')
+        ttk.Entry(frame_input, textvariable=self.check_expected_hash_var, width=60).grid(row=1, column=1, padx=5, pady=5)
+
+        # Eksekusi
+        self.btn_check = ttk.Button(self.tab_check, text="Mulai Cek Integritas", command=self.start_check_single_file)
+        self.btn_check.pack(pady=5)
+
+        # Progress (indeterminate, karena hash 1 file tidak punya milestone persentase)
+        self.lbl_check_status = ttk.Label(self.tab_check, text="Menunggu instruksi...")
+        self.lbl_check_status.pack(anchor='w', padx=15, pady=2)
+
+        self.prog_check = ttk.Progressbar(self.tab_check, orient='horizontal', mode='indeterminate')
+        self.prog_check.pack(fill='x', padx=15, pady=5)
+
+        # Hasil Pengecekan
+        frame_result = ttk.LabelFrame(self.tab_check, text=" Hasil Pengecekan ")
+        frame_result.pack(fill='x', padx=15, pady=10)
+
+        self.lbl_check_result_status = ttk.Label(frame_result, text="Menunggu proses...", font=('TkDefaultFont', 12, 'bold'))
+        self.lbl_check_result_status.grid(row=0, column=0, columnspan=2, padx=5, pady=(5, 10), sticky='w')
+
+        ttk.Label(frame_result, text="Hash Aktual (SHA256):").grid(row=1, column=0, padx=5, pady=5, sticky='w')
+        self.check_actual_hash_var = tk.StringVar()
+        ttk.Entry(frame_result, textvariable=self.check_actual_hash_var, width=70, state='readonly').grid(row=1, column=1, padx=5, pady=5, sticky='w')
+
+        ttk.Label(frame_result, text="Hash Pembanding:").grid(row=2, column=0, padx=5, pady=5, sticky='w')
+        self.check_result_expected_hash_var = tk.StringVar()
+        ttk.Entry(frame_result, textvariable=self.check_result_expected_hash_var, width=70, state='readonly').grid(row=2, column=1, padx=5, pady=5, sticky='w')
+
+        ttk.Label(frame_result, text="Ukuran File:").grid(row=3, column=0, padx=5, pady=5, sticky='w')
+        self.lbl_check_size = ttk.Label(frame_result, text="-")
+        self.lbl_check_size.grid(row=3, column=1, padx=5, pady=5, sticky='w')
 
     # ==============================
     # FUNGSI-FUNGSI BROWSE
@@ -192,6 +253,10 @@ class TaxDataIntegrityApp:
     def browse_manifest_in(self):
         file = filedialog.askopenfilename(title="Pilih File Manifest", filetypes=[("CSV Files", "*.csv")])
         if file: self.manifest_in_var.set(file)
+
+    def browse_check_file(self):
+        file = filedialog.askopenfilename(title="Pilih File yang Akan Dicek")
+        if file: self.check_file_var.set(file)
 
     # ==============================
     # ENGINE LOGIC (Jalan di Thread)
@@ -266,7 +331,7 @@ class TaxDataIntegrityApp:
         except Exception as e:
             self.msg_queue.put({"type": "error", "msg": f"Gagal menyimpan CSV: {e}"})
 
-    def thread_verify_integrity(self, tgt_dir, in_csv, expected_master_hash, include_subfolder):
+    def thread_verify_integrity(self, tgt_dir, in_csv, expected_master_hash, include_subfolder, start_dt):
         # 0. Verifikasi Master Hash manifest sebelum lanjut apapun (wajib).
         # Master Hash = SHA256 dari file manifest.csv itu sendiri (lihat thread_generate_manifest).
         # Kalau tidak cocok, manifest kemungkinan sudah diedit/rusak -> hasil verifikasi
@@ -355,7 +420,34 @@ class TaxDataIntegrityApp:
                 self.msg_queue.put({"type": "result_verify", "status": "MISSING", "file": rel_path, "size": meta["size"], "detail": "Hilang dari HDD eksternal."})
             self.msg_queue.put({"type": "progress_verify", "current": current_step, "total": total_steps, "file": rel_path})
 
-        self.msg_queue.put({"type": "done_verify", "total": total_steps})
+        end_dt = datetime.datetime.now()
+        self.msg_queue.put({
+            "type": "done_verify",
+            "total": total_steps,
+            "start_dt": start_dt,
+            "end_dt": end_dt,
+            "duration": end_dt - start_dt,
+            "host_name": socket.gethostname(),
+            "user_id": getpass.getuser(),
+        })
+
+    def thread_check_single_file(self, filepath, expected_hash):
+        actual_hash, size, _, status = self.calculate_file_hash(filepath, count_lines=False)
+        if actual_hash is None:
+            self.msg_queue.put({"type": "error", "msg": f"Gagal membaca file: {status}", "source": "check"})
+            return
+
+        expected_hash_clean = expected_hash.strip()
+        result_status = "MATCH" if actual_hash.lower() == expected_hash_clean.lower() else "MISMATCH"
+
+        self.msg_queue.put({
+            "type": "done_check_file",
+            "status": result_status,
+            "actual_hash": actual_hash,
+            "expected_hash": expected_hash_clean,
+            "size": size,
+            "file": os.path.basename(filepath),
+        })
 
     # ==============================
     # GUI EVENT HANDLERS & QUEUE LOOP
@@ -403,8 +495,34 @@ class TaxDataIntegrityApp:
         self.verification_results.clear()
         self.prog_verify['value'] = 0
 
+        start_dt = datetime.datetime.now()
+
         # Mulai Background Thread
-        thread = threading.Thread(target=self.thread_verify_integrity, args=(tgt, mani, expected_master_hash, include_subfolder), daemon=True)
+        thread = threading.Thread(target=self.thread_verify_integrity, args=(tgt, mani, expected_master_hash, include_subfolder, start_dt), daemon=True)
+        thread.start()
+
+    def start_check_single_file(self):
+        filepath = self.check_file_var.get()
+        expected_hash = self.check_expected_hash_var.get().strip()
+
+        if not filepath:
+            messagebox.showwarning("Peringatan", "Harap pilih file yang akan dicek.")
+            return
+
+        if not expected_hash:
+            messagebox.showwarning("Peringatan", "Harap isi Hash Pembanding.")
+            return
+
+        self.btn_check.config(state='disabled')
+        self.lbl_check_result_status.config(text="Memproses...", foreground='black')
+        self.check_actual_hash_var.set("")
+        self.check_result_expected_hash_var.set("")
+        self.lbl_check_size.config(text="-")
+        self.lbl_check_status.config(text=f"Menghitung hash: {os.path.basename(filepath)}")
+        self.prog_check.start(10)
+
+        # Mulai Background Thread
+        thread = threading.Thread(target=self.thread_check_single_file, args=(filepath, expected_hash), daemon=True)
         thread.start()
 
     # Urutan prioritas status: yang paling butuh perhatian tampil paling atas
@@ -431,10 +549,36 @@ class TaxDataIntegrityApp:
         if not self.verification_results: return
         file_path = filedialog.asksaveasfilename(title="Simpan Laporan", defaultextension=".csv", filetypes=[("CSV Files", "*.csv")])
         if file_path:
+            # Bangun isi tabel (header + baris hasil) dulu di memori, agar hash dihitung
+            # dari isi laporan yang sesungguhnya -> bukti integritas laporan itu sendiri.
+            body_buffer = io.StringIO()
+            body_writer = csv.writer(body_buffer)
+            body_writer.writerow(["Status", "Relative_Path", "Size_Bytes", "Detail"])
+            body_writer.writerows(self.verification_results)
+            body_text = body_buffer.getvalue()
+
+            report_hash = hashlib.sha256(body_text.encode('utf-8')).hexdigest()
+
+            meta = self.last_verify_meta or {}
+            start_dt = meta.get("start_dt")
+            end_dt = meta.get("end_dt")
+            duration = meta.get("duration")
+            host_name = meta.get("host_name", "-")
+            user_id = meta.get("user_id", "-")
+
+            tanggal_str = self.format_tanggal_indonesia(start_dt) if start_dt else "-"
+            start_str = start_dt.strftime('%H:%M:%S') if start_dt else "-"
+            end_str = end_dt.strftime('%H:%M:%S') if end_dt else "-"
+            durasi_str = self.format_duration_verbose(duration) if duration else "-"
+
             with open(file_path, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                writer.writerow(["Status", "Relative_Path", "Size_Bytes", "Detail"])
-                writer.writerows(self.verification_results)
+                f.write(f"# Tanggal Verifikasi : {tanggal_str}\n")
+                f.write(f"# Start Time : {start_str}\n")
+                f.write(f"# End Time : {end_str}\n")
+                f.write(f"# Durasi : {durasi_str}\n")
+                f.write(f"# Host Name & User Id : {host_name}/{user_id}\n")
+                f.write(f"# Verification Report Hash : {report_hash}\n")
+                f.write(body_text)
             messagebox.showinfo("Sukses", "Laporan Verifikasi berhasil disimpan.")
 
     def format_duration_hhmmss(self, td):
@@ -442,6 +586,15 @@ class TaxDataIntegrityApp:
         hours, remainder = divmod(total_seconds, 3600)
         minutes, seconds = divmod(remainder, 60)
         return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+    def format_duration_verbose(self, td):
+        total_seconds = int(td.total_seconds())
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return f"{hours} jam {minutes} menit {seconds} detik"
+
+    def format_tanggal_indonesia(self, dt):
+        return f"{dt.day:02d} {BULAN_ID[dt.month - 1]} {dt.year}"
 
     def copy_log_to_clipboard(self):
         log_text = self.txt_manifest_log.get('1.0', tk.END).strip()
@@ -505,6 +658,13 @@ class TaxDataIntegrityApp:
                 self.tree_verify.yview_moveto(1) # Auto scroll ke bawah
                 
             elif msg["type"] == "done_verify":
+                self.last_verify_meta = {
+                    "start_dt": msg["start_dt"],
+                    "end_dt": msg["end_dt"],
+                    "duration": msg["duration"],
+                    "host_name": msg["host_name"],
+                    "user_id": msg["user_id"],
+                }
                 self.prog_verify['value'] = self.prog_verify['maximum']
                 self.sort_verification_results()
                 self.lbl_verify_status.config(text="Verifikasi Selesai!")
@@ -524,10 +684,28 @@ class TaxDataIntegrityApp:
                     f"Actual   : {msg['actual']}"
                 )
 
+            elif msg["type"] == "done_check_file":
+                self.prog_check.stop()
+                self.btn_check.config(state='normal')
+                self.lbl_check_status.config(text=f"Selesai: {msg['file']}")
+
+                self.check_actual_hash_var.set(msg["actual_hash"])
+                self.check_result_expected_hash_var.set(msg["expected_hash"])
+                self.lbl_check_size.config(text=f"{msg['size']:,} bytes")
+
+                if msg["status"] == "MATCH":
+                    self.lbl_check_result_status.config(text="✅ MATCH - Hash Identik", foreground='#1e7e34')
+                else:
+                    self.lbl_check_result_status.config(text="❌ MISMATCH - Hash Berbeda", foreground='#c82333')
+
             elif msg["type"] == "error":
                 messagebox.showerror("Error", msg["msg"])
                 self.btn_generate.config(state='normal')
                 self.btn_verify.config(state='normal')
+                if msg.get("source") == "check":
+                    self.prog_check.stop()
+                    self.btn_check.config(state='normal')
+                    self.lbl_check_result_status.config(text="Gagal memproses file.", foreground='#c82333')
                 
         # Looping pengecekan antrean setiap 100ms
         self.root.after(100, self.check_queue_loop)
