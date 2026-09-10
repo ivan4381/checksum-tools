@@ -74,33 +74,6 @@ Langkah-langkah:
 
 ---
 
-## Tab 3: Check Integritas File (Single-File Check)
-
-Tab ini digunakan untuk mengecek integritas **1 file saja** terhadap satu hash pembanding, tanpa perlu membuat manifest CSV lengkap. Berguna saat Anda menerima file terpisah beserta hash-nya (misal lewat email atau chat), dan ingin verifikasi cepat.
-
-### Langkah-langkah:
-
-1. **File yang Dicek** — klik **Browse**, pilih file yang akan diverifikasi (bisa tipe file apa saja, tidak hanya CSV).
-2. **Hash Pembanding (Expected)** — masukkan nilai hash SHA-256 yang seharusnya (diterima dari pengirim).
-3. Klik **Mulai Cek Integritas**.
-   - Progress bar akan jalan dengan animasi (indeterminate) selama proses hashing berlangsung.
-   - Status label menampilkan nama file yang sedang diproses.
-4. Hasil akan tampil di panel "Hasil Pengecekan":
-   - **Label Status Besar** menampilkan:
-     - ✅ **MATCH** (hijau) — Hash identik, file aman.
-     - ❌ **MISMATCH** (merah) — Hash berbeda, file mungkin rusak/diubah.
-   - **Hash Aktual (SHA256)** — hash yang dihitung dari file yang dipilih (readonly, bisa di-select & copy manual dengan Ctrl+C).
-   - **Hash Pembanding** — echo balik dari input Anda (readonly).
-   - **Ukuran File** — ukuran file dalam bytes (dengan pemisah ribuan).
-
-### Tips:
-
-- Hash pembanding bisa diperoleh dari pengirim melalui berbagai saluran (email, chat, BAST, dll).
-- Jika file besar, proses hashing mungkin memakan waktu — tunggu sampai status berubah.
-- Anda bisa copy hash aktual ke clipboard untuk dibandingkan manual dengan hash pembanding jika perlu.
-
----
-
 ## Tips & Troubleshooting
 
 ### Tab 1 & 2 (Manifest & Verifikasi)
@@ -109,12 +82,6 @@ Tab ini digunakan untuk mengecek integritas **1 file saja** terhadap satu hash p
 - **Banyak status `UNTRACKED`**: kemungkinan opsi "Termasuk sub-folder" antara pembuatan manifest dan verifikasi berbeda, atau folder yang dipilih tidak sama persis dengan folder sumber aslinya.
 - **Proses lambat pada file besar**: aplikasi membaca file per-chunk (4 MB) sehingga cukup efisien untuk file besar, tapi tetap dibatasi kecepatan baca media penyimpanan (terutama HDD/media eksternal).
 - **Metadata di export verifikasi**: File CSV hasil export Tab 2 akan memiliki baris metadata di awal (ditandai `#`). Metadata ini dapat digunakan untuk memverifikasi integritas laporan itu sendiri — catat Verification Report Hash jika ingin buktian bahwa laporan tidak diubah setelah diekspor.
-
-### Tab 3 (Check Integritas File)
-
-- **Hash tidak cocok tapi seharusnya file sama**: pastikan hash pembanding yang dimasukkan benar-benar dari file yang sama dan tidak ada typo. Hash bersifat case-insensitive (besar-kecil tidak penting), tapi karakter harus sama persis.
-- **Proses hashing untuk file besar**: tunggu sampai progress bar selesai. Durasi tergantung ukuran file dan kecepatan media penyimpanan.
-- **Copy hash hasil**: jika ingin copy hash aktual untuk perbandingan lebih lanjut, klik di kotak hash aktual lalu Ctrl+C (readonly Entry support selection & copy).
 
 ### Umum
 

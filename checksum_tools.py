@@ -22,6 +22,9 @@ BULAN_ID = [
 # Versi Aplikasi - ubah di sini saat rilis versi baru, otomatis tampil di title bar
 APP_VERSION = "1.2.2"
 
+# Set True untuk menampilkan kembali Tab 3 (Check Integritas File)
+SHOW_TAB_CHECK = False
+
 # Konfigurasi Buffer Size untuk HDD (4 MB)
 CHUNK_SIZE = 4 * 1024 * 1024
 
@@ -100,6 +103,8 @@ class TaxDataIntegrityApp:
         self.tab_check = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_check, text='3. Check Integritas File')
         self.setup_check_tab()
+        if not SHOW_TAB_CHECK:
+            self.notebook.hide(self.tab_check)
 
     # ==============================
     # UI SETUP: TAB 1 (BUAT MANIFEST)
