@@ -1,5 +1,6 @@
 import os
 import sys
+import subprocess
 import csv
 import io
 import time
@@ -33,7 +34,7 @@ class TaxDataIntegrityApp:
     def __init__(self, root):
         self.root = root
         self.root.title(f"File Integrity Checker v{APP_VERSION} - Data Management SHD (dama.ppn.support@pertamina.com)")
-        self.root.geometry("800x600")
+        self.root.geometry("1024x768")
         self.root.minsize(700, 500)
 
         # Icon Aplikasi (title bar & taskbar)
@@ -45,10 +46,41 @@ class TaxDataIntegrityApp:
 
         # Antrean (Queue) untuk komunikasi antara background thread dan GUI
         self.msg_queue = queue.Queue()
-        
+
         self.setup_ui()
         self.check_queue_loop()
         
+    def create_display_entry(self, parent, textvariable, width):
+        """Entry untuk menampilkan nilai hasil proses (tidak bisa diketik user, tapi
+        tetap bisa di-select & copy).
+
+        Sengaja TIDAK memakai state='readonly': tema 'vista' menggambar Entry lewat
+        native Windows theme engine, yang memaksa background abu-abu pada state
+        readonly dan mengabaikan style override. Jadi Entry dibiarkan state normal
+        (tampilannya persis sama dengan field input biasa) dan pengetikan diblokir
+        lewat binding."""
+        entry = ttk.Entry(parent, textvariable=textvariable, width=width)
+        entry.bind('<Key>', self._block_entry_edit)
+        for event in ('<<Paste>>', '<<Cut>>', '<<Clear>>'):
+            entry.bind(event, lambda e: 'break')
+        return entry
+
+    # Tombol navigasi/modifier yang tetap diizinkan supaya user masih bisa
+    # menggeser kursor dan menyeleksi teks di dalam Entry.
+    ALLOWED_ENTRY_KEYS = {
+        'Left', 'Right', 'Up', 'Down', 'Home', 'End', 'Tab', 'ISO_Left_Tab',
+        'Shift_L', 'Shift_R', 'Control_L', 'Control_R', 'Alt_L', 'Alt_R',
+    }
+
+    @staticmethod
+    def _block_entry_edit(event):
+        if event.keysym in TaxDataIntegrityApp.ALLOWED_ENTRY_KEYS:
+            return None
+        # Ctrl+C / Ctrl+A tetap jalan (copy & select all); Ctrl+V/X tetap diblokir.
+        if event.state & 0x4 and event.keysym.lower() in ('c', 'a'):
+            return None
+        return 'break'
+
     def setup_ui(self):
         # Notebook (Tab Control)
         self.notebook = ttk.Notebook(self.root)
@@ -198,9 +230,7 @@ class TaxDataIntegrityApp:
         # File yang akan dicek
         self.check_file_var = tk.StringVar()
         ttk.Label(frame_input, text="File yang Dicek:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
-        ttk.Entry(
-            frame_input, textvariable=self.check_file_var, width=60, state='readonly'
-        ).grid(row=0, column=1, padx=5, pady=5)
+        self.create_display_entry(frame_input, self.check_file_var, 60).grid(row=0, column=1, padx=5, pady=5)
         ttk.Button(frame_input, text="Browse", command=self.browse_check_file).grid(row=0, column=2, padx=5, pady=5)
 
         # Hash pembanding (expected)
@@ -224,15 +254,11 @@ class TaxDataIntegrityApp:
 
         ttk.Label(frame_result, text="Hash Aktual (SHA256):").grid(row=1, column=0, padx=5, pady=5, sticky='w')
         self.check_actual_hash_var = tk.StringVar()
-        ttk.Entry(
-            frame_result, textvariable=self.check_actual_hash_var, width=70, state='readonly'
-        ).grid(row=1, column=1, padx=5, pady=5, sticky='w')
+        self.create_display_entry(frame_result, self.check_actual_hash_var, 70).grid(row=1, column=1, padx=5, pady=5, sticky='w')
 
         ttk.Label(frame_result, text="Hash Pembanding:").grid(row=2, column=0, padx=5, pady=5, sticky='w')
         self.check_result_expected_hash_var = tk.StringVar()
-        ttk.Entry(
-            frame_result, textvariable=self.check_result_expected_hash_var, width=70, state='readonly'
-        ).grid(row=2, column=1, padx=5, pady=5, sticky='w')
+        self.create_display_entry(frame_result, self.check_result_expected_hash_var, 70).grid(row=2, column=1, padx=5, pady=5, sticky='w')
 
         ttk.Label(frame_result, text="Ukuran File:").grid(row=3, column=0, padx=5, pady=5, sticky='w')
         self.lbl_check_size = ttk.Label(frame_result, text="-")
@@ -567,14 +593,25 @@ class TaxDataIntegrityApp:
 
             # Update status label & tampilkan pop-up sukses dengan hash + Copy button
             self.root.after(0, self.lbl_verify_status.config, {"text": f"Export sukses. Hash: {report_hash[:16]}... (lihat pop-up)"})
-            self.root.after(0, self.show_export_success_dialog, report_hash)
+            self.root.after(0, self.show_export_success_dialog, report_hash, file_path)
         # Log message ke text box di tab verify tidak ada, jadi cukup update status label
 
-    def show_export_success_dialog(self, report_hash):
+    def open_containing_folder(self, file_path):
+        """Buka Windows Explorer dan sorot file yang baru disimpan."""
+        try:
+            subprocess.run(['explorer', '/select,', os.path.normpath(file_path)])
+        except Exception as e:
+            messagebox.showerror("Error", f"Gagal membuka folder: {e}")
+
+    def show_export_success_dialog(self, report_hash, file_path):
         """Pop-up sukses export dengan hash dan tombol Copy to Clipboard."""
         dialog = tk.Toplevel(self.root)
         dialog.title("Laporan Verifikasi Berhasil Disimpan")
-        dialog.geometry("500x180")
+        dialog_w, dialog_h = 700, 180
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (dialog_w // 2)
+        y = (dialog.winfo_screenheight() // 2) - (dialog_h // 2)
+        dialog.geometry(f"{dialog_w}x{dialog_h}+{x}+{y}")
         dialog.resizable(False, False)
         dialog.grab_set()
 
@@ -589,15 +626,11 @@ class TaxDataIntegrityApp:
         lbl_hash_label = ttk.Label(frame_hash, text="Verification Report Hash:", font=("Segoe UI", 9, "bold"))
         lbl_hash_label.pack(anchor=tk.W, pady=(0, 3))
 
-        # Entry readonly untuk hash (bisa di-select & copy).
-        # Pakai tk.Entry (bukan ttk.Entry) karena ttk.Entry readonly di tema
-        # 'vista' Windows punya bug: teks tidak tampil meski textvariable terisi.
-        hash_var = tk.StringVar(value=report_hash)
-        entry_hash = tk.Entry(
-            frame_hash, textvariable=hash_var, state='readonly', width=70,
-            readonlybackground='white', fg='black', relief=tk.FLAT,
-            highlightthickness=1, highlightbackground='#7a7a7a', highlightcolor='#7a7a7a', borderwidth=0
-        )
+        # Referensi StringVar disimpan di self supaya tidak kena garbage collection
+        # saat fungsi ini selesai: kalau variabel Tcl-nya ikut terhapus, ttk.Entry
+        # ikut mengosongkan teksnya (beda dengan tk.Entry yang mempertahankan isi).
+        self._export_hash_var = tk.StringVar(value=report_hash)
+        entry_hash = self.create_display_entry(frame_hash, self._export_hash_var, 70)
         entry_hash.pack(fill=tk.X, pady=(0, 5))
 
         # Frame tombol
@@ -613,6 +646,13 @@ class TaxDataIntegrityApp:
 
         btn_copy = ttk.Button(frame_buttons, text="📋 Copy to Clipboard", command=copy_hash)
         btn_copy.pack(side=tk.LEFT, padx=(0, 5))
+
+        # Tombol Buka Folder Lokasi File
+        btn_open_folder = ttk.Button(
+            frame_buttons, text="📂 Buka Folder Lokasi File",
+            command=lambda: self.open_containing_folder(file_path)
+        )
+        btn_open_folder.pack(side=tk.LEFT, padx=(0, 5))
 
         # Tombol OK
         btn_ok = ttk.Button(frame_buttons, text="OK", command=dialog.destroy)
@@ -747,6 +787,27 @@ class TaxDataIntegrityApp:
 
 
 if __name__ == "__main__":
+    if sys.platform == "win32":
+        # Tandai proses sebagai DPI-aware supaya Windows tidak melakukan bitmap
+        # stretching pada window (penyebab tampilan pecah/blur di layar resolusi tinggi).
+        try:
+            import ctypes
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)  # Per-monitor DPI aware
+        except Exception:
+            try:
+                ctypes.windll.user32.SetProcessDPIAware()  # Fallback untuk Windows lama
+            except Exception:
+                pass
+
     root = tk.Tk()
+
+    # Samakan skala Tk dengan DPI layar aktual, supaya font & widget ikut
+    # membesar proporsional (bukan cuma tajam tapi tetap kecil).
+    try:
+        scaling = root.winfo_fpixels('1i') / 72.0
+        root.tk.call('tk', 'scaling', scaling)
+    except Exception:
+        pass
+
     app = TaxDataIntegrityApp(root)
     root.mainloop()
