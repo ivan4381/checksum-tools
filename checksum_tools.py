@@ -19,7 +19,7 @@ BULAN_ID = [
 ]
 
 # Versi Aplikasi - ubah di sini saat rilis versi baru, otomatis tampil di title bar
-APP_VERSION = "1.1.5"
+APP_VERSION = "1.2.2"
 
 # Konfigurasi Buffer Size untuk HDD (4 MB)
 CHUNK_SIZE = 4 * 1024 * 1024
