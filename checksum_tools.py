@@ -42,6 +42,7 @@ class TaxDataIntegrityApp:
         except Exception:
             pass
 
+
         # Antrean (Queue) untuk komunikasi antara background thread dan GUI
         self.msg_queue = queue.Queue()
         
@@ -197,7 +198,9 @@ class TaxDataIntegrityApp:
         # File yang akan dicek
         self.check_file_var = tk.StringVar()
         ttk.Label(frame_input, text="File yang Dicek:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
-        ttk.Entry(frame_input, textvariable=self.check_file_var, width=60, state='readonly').grid(row=0, column=1, padx=5, pady=5)
+        ttk.Entry(
+            frame_input, textvariable=self.check_file_var, width=60, state='readonly'
+        ).grid(row=0, column=1, padx=5, pady=5)
         ttk.Button(frame_input, text="Browse", command=self.browse_check_file).grid(row=0, column=2, padx=5, pady=5)
 
         # Hash pembanding (expected)
@@ -209,27 +212,27 @@ class TaxDataIntegrityApp:
         self.btn_check = ttk.Button(self.tab_check, text="Mulai Cek Integritas", command=self.start_check_single_file)
         self.btn_check.pack(pady=5)
 
-        # Progress (indeterminate, karena hash 1 file tidak punya milestone persentase)
         self.lbl_check_status = ttk.Label(self.tab_check, text="Menunggu instruksi...")
         self.lbl_check_status.pack(anchor='w', padx=15, pady=2)
-
-        self.prog_check = ttk.Progressbar(self.tab_check, orient='horizontal', mode='indeterminate')
-        self.prog_check.pack(fill='x', padx=15, pady=5)
 
         # Hasil Pengecekan
         frame_result = ttk.LabelFrame(self.tab_check, text=" Hasil Pengecekan ")
         frame_result.pack(fill='x', padx=15, pady=10)
 
-        self.lbl_check_result_status = ttk.Label(frame_result, text="Menunggu proses...", font=('TkDefaultFont', 12, 'bold'))
+        self.lbl_check_result_status = ttk.Label(frame_result, text="Menunggu Proses Dimulai...", font=('TkDefaultFont', 11, 'bold'))
         self.lbl_check_result_status.grid(row=0, column=0, columnspan=2, padx=5, pady=(5, 10), sticky='w')
 
         ttk.Label(frame_result, text="Hash Aktual (SHA256):").grid(row=1, column=0, padx=5, pady=5, sticky='w')
         self.check_actual_hash_var = tk.StringVar()
-        ttk.Entry(frame_result, textvariable=self.check_actual_hash_var, width=70, state='readonly').grid(row=1, column=1, padx=5, pady=5, sticky='w')
+        ttk.Entry(
+            frame_result, textvariable=self.check_actual_hash_var, width=70, state='readonly'
+        ).grid(row=1, column=1, padx=5, pady=5, sticky='w')
 
         ttk.Label(frame_result, text="Hash Pembanding:").grid(row=2, column=0, padx=5, pady=5, sticky='w')
         self.check_result_expected_hash_var = tk.StringVar()
-        ttk.Entry(frame_result, textvariable=self.check_result_expected_hash_var, width=70, state='readonly').grid(row=2, column=1, padx=5, pady=5, sticky='w')
+        ttk.Entry(
+            frame_result, textvariable=self.check_result_expected_hash_var, width=70, state='readonly'
+        ).grid(row=2, column=1, padx=5, pady=5, sticky='w')
 
         ttk.Label(frame_result, text="Ukuran File:").grid(row=3, column=0, padx=5, pady=5, sticky='w')
         self.lbl_check_size = ttk.Label(frame_result, text="-")
@@ -519,7 +522,6 @@ class TaxDataIntegrityApp:
         self.check_result_expected_hash_var.set("")
         self.lbl_check_size.config(text="-")
         self.lbl_check_status.config(text=f"Menghitung hash: {os.path.basename(filepath)}")
-        self.prog_check.start(10)
 
         # Mulai Background Thread
         thread = threading.Thread(target=self.thread_check_single_file, args=(filepath, expected_hash), daemon=True)
@@ -559,27 +561,62 @@ class TaxDataIntegrityApp:
 
             report_hash = hashlib.sha256(body_text.encode('utf-8')).hexdigest()
 
-            meta = self.last_verify_meta or {}
-            start_dt = meta.get("start_dt")
-            end_dt = meta.get("end_dt")
-            duration = meta.get("duration")
-            host_name = meta.get("host_name", "-")
-            user_id = meta.get("user_id", "-")
-
-            tanggal_str = self.format_tanggal_indonesia(start_dt) if start_dt else "-"
-            start_str = start_dt.strftime('%H:%M:%S') if start_dt else "-"
-            end_str = end_dt.strftime('%H:%M:%S') if end_dt else "-"
-            durasi_str = self.format_duration_verbose(duration) if duration else "-"
-
+            # Simpan file CSV (hanya data tabel, tanpa metadata header)
             with open(file_path, 'w', newline='', encoding='utf-8') as f:
-                f.write(f"# Tanggal Verifikasi : {tanggal_str}\n")
-                f.write(f"# Start Time : {start_str}\n")
-                f.write(f"# End Time : {end_str}\n")
-                f.write(f"# Durasi : {durasi_str}\n")
-                f.write(f"# Host Name & User Id : {host_name}/{user_id}\n")
-                f.write(f"# Verification Report Hash : {report_hash}\n")
                 f.write(body_text)
-            messagebox.showinfo("Sukses", "Laporan Verifikasi berhasil disimpan.")
+
+            # Update status label & tampilkan pop-up sukses dengan hash + Copy button
+            self.root.after(0, self.lbl_verify_status.config, {"text": f"Export sukses. Hash: {report_hash[:16]}... (lihat pop-up)"})
+            self.root.after(0, self.show_export_success_dialog, report_hash)
+        # Log message ke text box di tab verify tidak ada, jadi cukup update status label
+
+    def show_export_success_dialog(self, report_hash):
+        """Pop-up sukses export dengan hash dan tombol Copy to Clipboard."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Laporan Verifikasi Berhasil Disimpan")
+        dialog.geometry("500x180")
+        dialog.resizable(False, False)
+        dialog.grab_set()
+
+        # Label pesan utama
+        lbl_msg = ttk.Label(dialog, text="Laporan Verifikasi berhasil disimpan.", font=("Segoe UI", 10))
+        lbl_msg.pack(pady=(15, 10), padx=15)
+
+        # Frame untuk hash
+        frame_hash = ttk.Frame(dialog)
+        frame_hash.pack(fill=tk.X, padx=15, pady=5)
+
+        lbl_hash_label = ttk.Label(frame_hash, text="Verification Report Hash:", font=("Segoe UI", 9, "bold"))
+        lbl_hash_label.pack(anchor=tk.W, pady=(0, 3))
+
+        # Entry readonly untuk hash (bisa di-select & copy).
+        # Pakai tk.Entry (bukan ttk.Entry) karena ttk.Entry readonly di tema
+        # 'vista' Windows punya bug: teks tidak tampil meski textvariable terisi.
+        hash_var = tk.StringVar(value=report_hash)
+        entry_hash = tk.Entry(
+            frame_hash, textvariable=hash_var, state='readonly', width=70,
+            readonlybackground='white', fg='black', relief=tk.FLAT,
+            highlightthickness=1, highlightbackground='#7a7a7a', highlightcolor='#7a7a7a', borderwidth=0
+        )
+        entry_hash.pack(fill=tk.X, pady=(0, 5))
+
+        # Frame tombol
+        frame_buttons = ttk.Frame(dialog)
+        frame_buttons.pack(fill=tk.X, padx=15, pady=(10, 15))
+
+        # Tombol Copy to Clipboard
+        def copy_hash():
+            dialog.clipboard_clear()
+            dialog.clipboard_append(report_hash)
+            dialog.update()
+            messagebox.showinfo("Disalin", "Hash berhasil disalin ke clipboard.", parent=dialog)
+
+        btn_copy = ttk.Button(frame_buttons, text="📋 Copy to Clipboard", command=copy_hash)
+        btn_copy.pack(side=tk.LEFT, padx=(0, 5))
+
+        # Tombol OK
+        btn_ok = ttk.Button(frame_buttons, text="OK", command=dialog.destroy)
+        btn_ok.pack(side=tk.LEFT)
 
     def format_duration_hhmmss(self, td):
         total_seconds = int(td.total_seconds())
@@ -685,7 +722,6 @@ class TaxDataIntegrityApp:
                 )
 
             elif msg["type"] == "done_check_file":
-                self.prog_check.stop()
                 self.btn_check.config(state='normal')
                 self.lbl_check_status.config(text=f"Selesai: {msg['file']}")
 
@@ -703,7 +739,6 @@ class TaxDataIntegrityApp:
                 self.btn_generate.config(state='normal')
                 self.btn_verify.config(state='normal')
                 if msg.get("source") == "check":
-                    self.prog_check.stop()
                     self.btn_check.config(state='normal')
                     self.lbl_check_result_status.config(text="Gagal memproses file.", foreground='#c82333')
                 
