@@ -24,19 +24,19 @@ Aplikasi desktop (Tkinter) untuk membuat manifest checksum (SHA-256) dari sebuah
 ## Kebutuhan
 
 - Python 3.9+ dengan Tkinter (bawaan instalasi Python standar dari [python.org](https://www.python.org/)).
-- Tidak ada dependency pihak ketiga untuk menjalankan aplikasi — lihat [requirements.txt](requirements.txt) (isinya hanya dependency untuk build exe).
+- Tidak ada dependency pihak ketiga untuk menjalankan aplikasi. PyInstaller (untuk build exe) tercatat sebagai dev dependency di `pyproject.toml`, versi terkunci di `uv.lock` (dikelola dengan [uv](https://docs.astral.sh/uv/)).
 
 ## Menjalankan dari Source
 
 ```bash
-python checksum_tools.py
+uv run checksum_tools.py
 ```
 
 ## Build ke .exe (Windows, one-file)
 
 ```bash
-pip install -r requirements.txt
-pyinstaller --onefile --windowed --icon="verified.ico" --add-data "verified.ico;." --name checksum_tools checksum_tools.py
+uv sync
+uv run pyinstaller --onefile --windowed --icon="verified.ico" --add-data "verified.ico;." --name checksum_tools checksum_tools.py
 ```
 
 Hasil build ada di folder `dist/checksum_tools.exe`. Icon `.ico` dibuat dari `verified.png` (dikonversi sekali dengan Pillow) dan dipakai baik untuk icon file exe (`--icon`) maupun icon title bar/taskbar saat aplikasi berjalan (di-load lewat `resource_path()` di dalam kode).
